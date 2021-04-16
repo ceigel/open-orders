@@ -1,0 +1,20 @@
+[package]
+name = "open-orders"
+version = "0.1.0"
+authors = ["Cristian Eigel <cristian.eigel@icloud.com>"]
+edition = "2018"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "example"
+harness = false # Allows Cucumber to print output instead of libtest
+
+[[test]]
+name = "public_api"
+harness = false # Allows Cucumber to print output instead of libtest
+
+
+[dev-dependencies]
+cucumber_rust = { version = "0.8.4", features = ["macros"] }
