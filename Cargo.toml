@@ -18,3 +18,6 @@ harness = false # Allows Cucumber to print output instead of libtest
 
 [dev-dependencies]
 cucumber_rust = { version = "0.8.4", features = ["macros"] }
+reqwest = { version = "0.11", features = ["json"] }
+chrono = "0.4.19"
+serde = "1.0.125"
