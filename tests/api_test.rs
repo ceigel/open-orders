@@ -1,8 +1,9 @@
 use cucumber_rust::{async_trait, given, then, when, World, WorldInit};
-use reqwest::{Client, Response};
+use reqwest::{Client, RequestBuilder, Response};
 use serde_json;
 use std::convert::Infallible;
 
+mod answer_data;
 const API_DOMAIN: &str = "https://api.kraken.com";
 
 pub trait Validatable {
@@ -11,8 +12,11 @@ pub trait Validatable {
 
 #[derive(WorldInit)]
 pub struct MyWorld {
-    request_url: String,
+    request_builder: Option<RequestBuilder>,
     response: Option<Response>,
+    api_public_key: String,
+    api_private_key: String,
+    two_factor_pwd: String,
 }
 
 #[async_trait(?Send)]
@@ -20,26 +24,68 @@ impl World for MyWorld {
     type Error = Infallible;
 
     async fn new() -> Result<Self, Infallible> {
+        use std::env;
         Ok(Self {
-            request_url: "".into(),
+            request_builder: None,
             response: None,
+            api_public_key: env::var("API_Public_Key")
+                .expect("to have the environment variable API_Public_Key"),
+            api_private_key: env::var("API_Private_Key")
+                .expect("to have the environment variable API_Private_Key"),
+            two_factor_pwd: env::var("OTP").expect("to have the environment variable OTP"),
         })
     }
 }
 
-#[given(regex = "The api url (.*)")]
-fn the_api(world: &mut MyWorld, url: String) {
-    world.request_url = format!("{}{}", API_DOMAIN, url);
+#[given(regex = "A request to public url (.*)")]
+fn public_api(world: &mut MyWorld, url: String) {
+    let request_url = format!("{}{}", API_DOMAIN, url);
+    let req_builder = Client::new()
+        .get(request_url)
+        .header("User-Agent", "Kraken REST API");
+    world.request_builder = Some(req_builder);
 }
 
-#[when("I do a GET request to it")]
+#[given(regex = "An authenticated request to private url (.*)")]
+fn private_api(world: &mut MyWorld, url: String) {
+    let nonce: u64 = chrono::offset::Utc::now().timestamp_millis() as u64;
+    //let nonce: u64 = 1618690640656;
+    let request_url = format!("{}{}", API_DOMAIN, url);
+    let post_data = format!("&nonce={}&otp={}", nonce, world.two_factor_pwd);
+    let to_hash = format!("{}{}", nonce, post_data);
+
+    use sha2::{Digest, Sha256, Sha512};
+    let sha256_digest = Sha256::digest(to_hash.as_bytes());
+
+    use hmac::{Hmac, Mac, NewMac};
+    type HmacSha512 = Hmac<Sha512>;
+    let api_secret = base64::decode(world.api_private_key.as_str()).expect("to decode private key");
+    let mut mac = HmacSha512::new_varkey(&api_secret).expect("to be able to create hmac");
+    mac.update(&url.as_bytes());
+    mac.update(&sha256_digest);
+    let hmac_sha512 = mac.finalize();
+
+    let req_builder = Client::new()
+        .post(request_url)
+        .body(post_data)
+        .header("API-Key", world.api_public_key.clone())
+        .header("API-Sign", base64::encode(hmac_sha512.into_bytes()))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("User-Agent", "Kraken REST API");
+    world.request_builder.replace(req_builder);
+}
+
+#[when("I send it")]
 async fn i_request(world: &mut MyWorld) {
-    let res = Client::new()
-        .get(world.request_url.as_str())
-        .header("User-Agent", "Kraken REST API")
-        .send()
-        .await;
-    assert!(res.is_ok());
+    let req = world
+        .request_builder
+        .take()
+        .expect("to have a request already built");
+    let res = req.send().await;
+    if !res.is_ok() {
+        println!("{:?}", res);
+        panic!("Server responded with error")
+    }
     world.response = res.ok();
 }
 
@@ -57,128 +103,7 @@ fn server_responds(world: &mut MyWorld, status: String) {
     }
 }
 
-mod api_answer {
-    use crate::Validatable;
-    use chrono::DateTime;
-    use serde::Deserialize;
-    use std::collections::HashMap;
-
-    #[derive(Deserialize, Debug)]
-    pub struct TimeResult {
-        pub unixtime: i64,
-        pub rfc1123: String,
-    }
-
-    impl Validatable for TimeResult {
-        fn check_valid(&self) {
-            // rfc2822 is a newer format of rfc1233, thus they should be compatible
-            let time_rfc2822 = DateTime::parse_from_rfc2822(&self.rfc1123)
-                .expect("to be able to parse rfc1233 time");
-            // Expect that unixtime is the same time as the rfc1233 field
-            assert_eq!(time_rfc2822.timestamp(), self.unixtime);
-        }
-    }
-
-    #[derive(Deserialize, Debug)]
-    pub struct TickerResultData {
-        #[serde(rename(deserialize = "a"))]
-        ask: [String; 3],
-
-        #[serde(rename(deserialize = "b"))]
-        bid: [String; 3],
-
-        #[serde(rename(deserialize = "c"))]
-        closed: [String; 2],
-
-        #[serde(rename(deserialize = "v"))]
-        volume: [String; 2],
-
-        #[serde(rename(deserialize = "p"))]
-        weighted_average_volume: [String; 2],
-
-        #[serde(rename(deserialize = "t"))]
-        number_of_trades: [u64; 2],
-
-        #[serde(rename(deserialize = "l"))]
-        low: [String; 2],
-        #[serde(rename(deserialize = "h"))]
-        high: [String; 2],
-        #[serde(rename(deserialize = "o"))]
-        day_opening_price: String,
-    }
-
-    // Check if the array is parsable as float (decimal would be better, buf float is also ok here)
-    fn as_float_array(arr: &[String]) -> Vec<f64> {
-        use std::str::FromStr;
-        let vals: Result<Vec<f64>, std::num::ParseFloatError> =
-            arr.iter().map(|val| f64::from_str(val)).collect();
-        vals.expect("to be able to parse all values")
-    }
-
-    impl Validatable for TickerResultData {
-        fn check_valid(&self) {
-            assert_ne!(self.number_of_trades[0], 0);
-            assert_ne!(self.number_of_trades[1], 0);
-            assert!(self.number_of_trades[0] < self.number_of_trades[1]);
-            let asks = as_float_array(self.ask.as_ref());
-            assert!(asks.iter().all(|&v| v > 0.0));
-
-            let bids = as_float_array(self.bid.as_ref());
-            assert!(bids.iter().all(|&v| v > 0.0));
-
-            let closed = as_float_array(self.closed.as_ref());
-            //maybe this fails at beginning of the day
-            assert!(closed.iter().all(|&v| v > 0.0));
-
-            let volume = as_float_array(self.volume.as_ref());
-            // since we only test with XBT, the volume for last 24 hours can't be null
-            // at beginning of the day this can be null
-            assert!(volume[1..].iter().all(|&v| v > 0.0));
-
-            let wav = as_float_array(self.weighted_average_volume.as_ref());
-            // since we only test with XBT, the volume for last 24 hours can't be null
-            // at beginning of the day this can be null
-            assert!(wav[1..].iter().all(|&v| v > 0.0));
-
-            let low = as_float_array(self.low.as_ref());
-            assert!(low.iter().all(|&v| v > 0.0));
-
-            let high = as_float_array(self.high.as_ref());
-            assert!(high.iter().all(|&v| v > 0.0));
-
-            let open = as_float_array(&[self.day_opening_price.clone()][..]);
-            assert!(open.iter().all(|&v| v > 0.0));
-        }
-    }
-
-    #[derive(Deserialize, Debug)]
-    pub struct TickerResult(HashMap<String, TickerResultData>);
-    impl TickerResult {
-        pub fn print_price(&self) {
-            println!("XBT/USD last price: {}", self.0["XXBTZUSD"].closed[0]);
-        }
-    }
-
-    impl Validatable for TickerResult {
-        fn check_valid(&self) {
-            let ticker_names: Vec<&str> = self.0.keys().map(|s| s.as_str()).collect();
-            assert_eq!(ticker_names, vec!["XXBTZUSD"]);
-            self.0[ticker_names[0]].check_valid();
-        }
-    }
-    #[derive(Deserialize, Debug)]
-    pub struct Answer<T> {
-        pub error: Vec<String>,
-        pub result: T,
-    }
-    impl<T: Validatable> Validatable for Answer<T> {
-        fn check_valid(&self) {
-            assert_eq!(self.error.len(), 0);
-            self.result.check_valid();
-        }
-    }
-}
-#[then(regex = "The response has the correct (time|ticker) format")]
+#[then(regex = "The response has the correct (time|ticker|orders) format")]
 async fn response_time_format(world: &mut MyWorld, check_type: String) {
     let response = world.response.take().expect("to have a response");
     let resp_bytes = response
@@ -188,17 +113,25 @@ async fn response_time_format(world: &mut MyWorld, check_type: String) {
     match check_type.to_lowercase().as_str() {
         "time" => {
             //json response validation
-            let resp_json: api_answer::Answer<api_answer::TimeResult> =
+            let resp_json: answer_data::Answer<answer_data::TimeResult> =
                 serde_json::from_slice(&resp_bytes).expect("to be able to parse response");
             println!("Server responded with time: {}", resp_json.result.rfc1123);
             resp_json.result.check_valid();
         }
         "ticker" => {
             //json response validation
-            let resp_json: api_answer::Answer<api_answer::TickerResult> =
+            let resp_json: answer_data::Answer<answer_data::TickerResult> =
                 serde_json::from_slice(&resp_bytes).expect("to be able to parse response");
             resp_json.result.check_valid();
             resp_json.result.print_price();
+        }
+        "orders" => {
+            let resp_json: answer_data::Answer<answer_data::OrdersResult> =
+                serde_json::from_slice(&resp_bytes).expect("to be able to parse response");
+            resp_json.result.check_valid();
+            let order_names: Vec<&String> =
+                resp_json.result.open.as_object().unwrap().keys().collect();
+            println!("Got {} open orders: {:?}", order_names.len(), order_names);
         }
         _ => panic!("unrecognized check type"),
     }
