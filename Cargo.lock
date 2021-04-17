@@ -776,6 +776,7 @@ dependencies = [
  "cucumber_rust",
  "reqwest",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
