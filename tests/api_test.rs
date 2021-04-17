@@ -206,6 +206,6 @@ async fn response_time_format(world: &mut MyWorld, check_type: String) {
 
 #[tokio::main]
 async fn main() {
-    let runner = MyWorld::init(&["./features/public_api"]);
+    let runner = MyWorld::init(&["./features"]);
     runner.debug(true).run_and_exit().await;
 }

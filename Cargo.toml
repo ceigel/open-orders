@@ -8,13 +8,8 @@ edition = "2018"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [[test]]
-name = "example"
+name = "api_test"
 harness = false # Allows Cucumber to print output instead of libtest
-
-[[test]]
-name = "public_api"
-harness = false # Allows Cucumber to print output instead of libtest
-
 
 [dev-dependencies]
 cucumber_rust = { version = "0.8.4", features = ["macros"] }
