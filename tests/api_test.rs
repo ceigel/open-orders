@@ -16,7 +16,7 @@ pub struct MyWorld {
     response: Option<Response>,
     api_public_key: String,
     api_private_key: String,
-    two_factor_pwd: String,
+    otp_setup_key: String,
 }
 
 #[async_trait(?Send)]
@@ -32,7 +32,8 @@ impl World for MyWorld {
                 .expect("to have the environment variable API_Public_Key"),
             api_private_key: env::var("API_Private_Key")
                 .expect("to have the environment variable API_Private_Key"),
-            two_factor_pwd: env::var("OTP").expect("to have the environment variable OTP"),
+            otp_setup_key: env::var("OTP_Setup_Key")
+                .expect("to have the environment variable OTP_Setup_Key"),
         })
     }
 }
@@ -46,14 +47,19 @@ fn public_api(world: &mut MyWorld, url: String) {
     world.request_builder = Some(req_builder);
 }
 
+fn otp_token(otp_setup_key: &str) -> String {
+    let start_code =
+        base32::decode(base32::Alphabet::RFC4648 { padding: false }, otp_setup_key).unwrap();
+    let otp_code = oath::totp_raw_now(&start_code, 6, 0, 30, &oath::HashType::SHA1);
+    otp_code.to_string()
+}
+
 #[given(regex = "An authenticated request to private url (.*)")]
 fn private_api(world: &mut MyWorld, url: String) {
     let nonce: u64 = chrono::offset::Utc::now().timestamp_millis() as u64;
     let request_url = format!("{}{}", API_DOMAIN, url);
-    let post_data = [
-        ("nonce", &nonce.to_string()),
-        ("otp", &world.two_factor_pwd),
-    ];
+    let otp_code = otp_token(&world.otp_setup_key);
+    let post_data = [("nonce", &nonce.to_string()), ("otp", &otp_code)];
     let to_hash = format!(
         "{}{}",
         nonce,
@@ -138,6 +144,7 @@ async fn response_time_format(world: &mut MyWorld, check_type: String) {
             let order_names: Vec<&String> =
                 resp_json.result.open.as_object().unwrap().keys().collect();
             println!("Got {} open orders: {:?}", order_names.len(), order_names);
+            println!("Orders_json {}", resp_json.result.open.to_string());
         }
         _ => panic!("unrecognized check type"),
     }
