@@ -49,10 +49,16 @@ fn public_api(world: &mut MyWorld, url: String) {
 #[given(regex = "An authenticated request to private url (.*)")]
 fn private_api(world: &mut MyWorld, url: String) {
     let nonce: u64 = chrono::offset::Utc::now().timestamp_millis() as u64;
-    //let nonce: u64 = 1618690640656;
     let request_url = format!("{}{}", API_DOMAIN, url);
-    let post_data = format!("&nonce={}&otp={}", nonce, world.two_factor_pwd);
-    let to_hash = format!("{}{}", nonce, post_data);
+    let post_data = [
+        ("nonce", &nonce.to_string()),
+        ("otp", &world.two_factor_pwd),
+    ];
+    let to_hash = format!(
+        "{}{}",
+        nonce,
+        serde_urlencoded::to_string(post_data).expect("to encode post_data")
+    );
 
     use sha2::{Digest, Sha256, Sha512};
     let sha256_digest = Sha256::digest(to_hash.as_bytes());
@@ -67,7 +73,7 @@ fn private_api(world: &mut MyWorld, url: String) {
 
     let req_builder = Client::new()
         .post(request_url)
-        .body(post_data)
+        .form(&post_data)
         .header("API-Key", world.api_public_key.clone())
         .header("API-Sign", base64::encode(hmac_sha512.into_bytes()))
         .header("Content-Type", "application/x-www-form-urlencoded")
