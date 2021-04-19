@@ -1,3 +1,4 @@
+use chrono::offset::Utc;
 use cucumber_rust::{async_trait, given, then, when, World, WorldInit};
 use reqwest::{Client, RequestBuilder, Response};
 use serde_json;
@@ -56,7 +57,7 @@ fn otp_token(otp_setup_key: &str) -> String {
 
 #[given(regex = "An authenticated request to private url (.*)")]
 fn private_api(world: &mut MyWorld, url: String) {
-    let nonce: u64 = chrono::offset::Utc::now().timestamp_millis() as u64;
+    let nonce: u64 = Utc::now().timestamp_millis() as u64;
     let request_url = format!("{}{}", API_DOMAIN, url);
     let otp_code = otp_token(&world.otp_setup_key);
     let post_data = [("nonce", &nonce.to_string()), ("otp", &otp_code)];
@@ -125,26 +126,29 @@ async fn response_time_format(world: &mut MyWorld, check_type: String) {
     match check_type.to_lowercase().as_str() {
         "time" => {
             //json response validation
-            let resp_json: answer_data::Answer<answer_data::TimeResult> =
+            let response_data: answer_data::Answer<answer_data::TimeResult> =
                 serde_json::from_slice(&resp_bytes).expect("to be able to parse response");
-            println!("Server responded with time: {}", resp_json.result.rfc1123);
-            resp_json.result.check_valid();
+            response_data.check_valid();
+            println!(
+                "Server responded with time: {}",
+                response_data.result.unwrap().rfc1123
+            );
         }
         "ticker" => {
             //json response validation
-            let resp_json: answer_data::Answer<answer_data::TickerResult> =
+            let response_data: answer_data::Answer<answer_data::TickerResult> =
                 serde_json::from_slice(&resp_bytes).expect("to be able to parse response");
-            resp_json.result.check_valid();
-            resp_json.result.print_price();
+            response_data.check_valid();
+            response_data.result.unwrap().print_price();
         }
         "orders" => {
-            let resp_json: answer_data::Answer<answer_data::OrdersResult> =
+            let response_data: answer_data::Answer<answer_data::OrdersResult> =
                 serde_json::from_slice(&resp_bytes).expect("to be able to parse response");
-            resp_json.result.check_valid();
-            let order_names: Vec<&String> =
-                resp_json.result.open.as_object().unwrap().keys().collect();
+            response_data.check_valid();
+            let result = response_data.result.unwrap(); //can't fail since check_valid would return failure
+            let order_names: Vec<&String> = result.open.as_object().unwrap().keys().collect();
             println!("Got {} open orders: {:?}", order_names.len(), order_names);
-            println!("Orders_json {}", resp_json.result.open.to_string());
+            println!("Orders_json {}", result.open.to_string());
         }
         _ => panic!("unrecognized check type"),
     }
@@ -153,5 +157,14 @@ async fn response_time_format(world: &mut MyWorld, check_type: String) {
 #[tokio::main]
 async fn main() {
     let runner = MyWorld::init(&["./features"]);
-    runner.debug(true).run_and_exit().await;
+    // debug needed to output information
+    let results = runner.debug(true).cli().run().await;
+    // Print results of the test run
+    if results.failed() {
+        println!("Test failed!");
+        std::process::exit(1);
+    } else {
+        println!("Ran {} scenarios successfully!", results.scenarios.passed);
+        std::process::exit(0);
+    }
 }

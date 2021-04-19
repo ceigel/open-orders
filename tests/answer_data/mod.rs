@@ -93,6 +93,7 @@ impl Validatable for TickerResultData {
 
 #[derive(Deserialize, Debug)]
 pub struct TickerResult(HashMap<String, TickerResultData>);
+
 impl TickerResult {
     pub fn print_price(&self) {
         println!("XBT/USD last price: {}", self.0["XXBTZUSD"].closed[0]);
@@ -118,12 +119,21 @@ impl Validatable for OrdersResult {
 #[derive(Deserialize, Debug)]
 pub struct Answer<T> {
     pub error: Vec<serde_json::Value>,
-    pub result: T,
+    // Option because if answer fails, the result is not present
+    pub result: Option<T>,
 }
 
 impl<T: Validatable> Validatable for Answer<T> {
     fn check_valid(&self) {
-        assert_eq!(self.error.len(), 0);
-        self.result.check_valid();
+        assert_eq!(
+            self.error.len(),
+            0,
+            "Answer contains error: {:?}",
+            self.error
+        );
+        self.result
+            .as_ref()
+            .expect("to have a result")
+            .check_valid();
     }
 }
