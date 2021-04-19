@@ -1,7 +1,6 @@
 use chrono::offset::Utc;
 use cucumber_rust::{async_trait, given, then, when, World, WorldInit};
 use reqwest::{Client, RequestBuilder, Response};
-use serde_json;
 use std::convert::Infallible;
 
 mod answer_data;
@@ -147,8 +146,10 @@ async fn response_time_format(world: &mut MyWorld, check_type: String) {
             response_data.check_valid();
             let result = response_data.result.unwrap(); //can't fail since check_valid would return failure
             let order_names: Vec<&String> = result.open.as_object().unwrap().keys().collect();
-            println!("Got {} open orders: {:?}", order_names.len(), order_names);
-            println!("Orders_json {}", result.open.to_string());
+            println!("Got {} open orders:", order_names.len());
+            for name in order_names {
+                println!("    {} - {}", name, result.open[name]["descr"]["order"]);
+            }
         }
         _ => panic!("unrecognized check type"),
     }
@@ -157,7 +158,7 @@ async fn response_time_format(world: &mut MyWorld, check_type: String) {
 #[tokio::main]
 async fn main() {
     let runner = MyWorld::init(&["./features"]);
-    // debug needed to output information
+    // debug needed to print captured output
     let results = runner.debug(true).cli().run().await;
     // Print results of the test run
     if results.failed() {
